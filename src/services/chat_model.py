@@ -1,87 +1,130 @@
-from typing import ClassVar, Union, Optional, List, Dict, Any
+from typing import Any
 from uuid import UUID
 import pprint
 import traceback
-from pydantic import BaseModel
+import logging
 from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain.chat_models import init_chat_model
-from services.tool_manager import ToolManager   
-from services.chat_history import ChatHistoryManager
-from utils import warn, error, success, dbg_important
+from .tool_manager import ToolManager   
+from .chat_history import ChatHistoryManager
+from .calcom_service import CalComService
+from config import AppConfig
+from datetime import datetime
 
-
-# OpenAI model options
-OPENAI_GPT4_TURBO = "gpt-4-turbo"
-OPENAI_GPT4 = "gpt-4"
-OPENAI_GPT35_TURBO = "gpt-3.5-turbo"
+# Set up logger for this module
+logger = logging.getLogger(__name__)
 
 class ChatModelService:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+    def __init__(self, config: AppConfig, chat_history: ChatHistoryManager) -> None:
+        """
+        Initialize ChatModelService with configuration.
+        
+        Args:
+            config: Application configuration
+            chat_history: Chat history manager instance
+        """
+        self.config = config
+        self.chat_history = chat_history
+        
+        logger.info(f"Initializing ChatModelService with model: {config.openai.model_name}")
+        
         try:
-            self.chat_llm_no_tools = self.gpt4_turbo_model()
-            self.tool_manager = ToolManager()
-            dbg_important(f"CHAD: ChatModelService self.chat_llm_no_tools before bind_tools: {self.chat_llm_no_tools}")
+            # Initialize CalCom service
+            calcom_service = CalComService(config.calcom)
+            
+            # Initialize tool manager with CalCom service
+            self.tool_manager = ToolManager(calcom_service)
+            
+            # Create chat models
+            self.chat_llm_no_tools = self.get_model()
+            logger.debug(f"Chat LLM before bind_tools: {self.chat_llm_no_tools}")
+            
             self.chat_llm = self.chat_llm_no_tools.bind_tools(self.tool_manager.working_tools)
-            success(f"CHAD: ChatModelService bind_tools() SUCCESS! tools={self.tool_manager.working_tools}\n")
+            logger.info(f"Successfully bound tools: {len(self.tool_manager.working_tools)} tools")
+            
         except Exception as e:
-            error(f"CHAD: ChatModelService: {type(e)} Exception:\n{e}\n{repr(e)}\n")
-            error(traceback.format_exc())
-            print("\n\n")
+            logger.error(f"ChatModelService initialization failed: {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
             raise e
 
+    def get_model(self) -> ChatOpenAI:
+        """Get the appropriate model based on configuration."""
+        model_name = self.config.openai.model_name
 
-    def gpt4_turbo_model(self) -> ChatOpenAI:
-        if not '_gpt4_turbo_model' in self.__dict__:      
-            self._gpt4_turbo_model = ChatOpenAI(
-                model=OPENAI_GPT4_TURBO,
-                openai_api_key=self.api_key,
-                max_tokens=1024,
-                temperature=0,
+        if not hasattr(self, "_model_cache"):
+            self._model_cache = {}
+
+        if model_name not in self._model_cache:
+            self._model_cache[model_name] = ChatOpenAI(
+                model=model_name,
+                openai_api_key=self.config.openai.api_key,
+                max_tokens=self.config.openai.max_tokens,
+                temperature=self.config.openai.temperature,
                 callbacks=[MyCustomHandler()],
             )
-        return self._gpt4_turbo_model
+        return self._model_cache[model_name]
 
-    def gpt4_model(self) -> ChatOpenAI:
-        if not '_gpt4_model' in self.__dict__:      
-            self._gpt4_model = ChatOpenAI(
-                model=OPENAI_GPT4,
-                openai_api_key=self.api_key,
-                max_tokens=1024,
-                temperature=0,
-                callbacks=[MyCustomHandler()],
-            )
-        return self._gpt4_model
-
-    def gpt35_turbo_model(self) -> ChatOpenAI:
-        if not '_gpt35_turbo_model' in self.__dict__:        
-            self._gpt35_turbo_model = ChatOpenAI(
-                model=OPENAI_GPT35_TURBO,
-                openai_api_key=self.api_key,
-                max_tokens=1024,
-                temperature=0,
-                callbacks=[MyCustomHandler()],
-            )
-        return self._gpt35_turbo_model
 
     def get_system_message(self) -> str:
-        system_prompt = """
-        You are a helpful assistant that can access external tool functions without asking the human user.
-        The responses from these function calls will be appended to this dialogue as a message from "tool". 
-        Using these tool responses, Please provide responses to the human user based on the information from these function calls.
+        today = datetime.now().strftime("%Y-%m-%d %A")
+        system_prompt = f"""
+        Today is {today} and the conversation is in the timezone {self.config.calcom.timezone}.
+        
+        You are a helpful assistant capable of using external tool functions autonomously. 
+        Tool responses will appear in this conversation as messages from "tool". 
+        Use these responses to help the user as naturally and efficiently as possible.
+
+        You have access to calendar management tools via the Cal.com API.
+        
+        Tasks and Instructions:
+        
+        1. Booking a Meeting
+        
+        When the user requests to book a meeting:
+        
+        - Ask what day(s) they prefer if they haven't already provided them.
+        - Use the check_availability tool to retrieve available times.
+        - Present the user with options including:
+          - Date of the meeting, confirmed in this format: <YYYY-MM-DD DAY>
+          - Preferred times for each date, in 12 hour format: <HH:MM AM/PM>
+        
+        - Ask for the reason for the meeting.
+        - Confirm the attendee's name and email.
+          - Use default values of:
+            - Name: Chad Dev
+            - Email: dev@chadnorwood.com
+        
+        - Once all details are collected, use the book_meeting tool to schedule the meeting.
+        
+        2. Viewing Scheduled Events
+        
+        If the user wants to see their scheduled events:
+        
+        - Ask for their email address.
+        - Use the get_scheduled_bookings tool to retrieve the events.
+        
+        3. Checking Availability
+        
+        If the user asks for availability on a specific date:
+        
+        - Use the check_availability tool with the provided date.
+        - Present available time slots for that day.
+        
+        Conversational Guidelines:
+        
+        - Keep the conversation natural and friendly.
+        - Ask for one piece of information at a time.
+        - Store and reuse user-provided information during the session.
+        - Respond clearly and helpfully using the data returned by tools.
         """
         return ' '.join(system_prompt.split())
 
-
-    def set_chat_history(self, chat_history: ChatHistoryManager, skip_system_message: bool = False):
+    def set_chat_history(self, chat_history: ChatHistoryManager, skip_system_message: bool = False) -> None:
         self.chat_history = chat_history
         if not skip_system_message:
             # should we check to see if a system message already exists? No, trust the boolean.
             self.chat_history.add_system_message(self.get_system_message())
-
 
     def generate_response_langchain(self, content: str = None) -> str:
         """Generate a chat response using the Langchain API.
@@ -103,15 +146,15 @@ class ChatModelService:
         while remaining_tool_turns > 0:
             remaining_tool_turns -= 1
             # response_ai_msg is a AI Message object, the response from AI to human.
-            dbg_important(f"\nCHAD: generate_response_langchain remaining_tool_turns={remaining_tool_turns} chat_history.messages length={len(self.chat_history.messages)} ")
+            logger.debug(f"\nChat LLM remaining_tool_turns={remaining_tool_turns} chat_history.messages length={len(self.chat_history.messages)} ")
             response_ai_msg = self.chat_llm.invoke(self.chat_history.messages)
             tool_responses = []
             try:
-                dbg_important("\nCHAD: generate_response_langchain() response_ai_msg: ")
+                logger.debug("\nChat LLM response_ai_msg: ")
                 pprint.pp(response_ai_msg)
                 tool_responses = self.tool_manager.execute_tool_calls(response_ai_msg)
             except Exception as e:
-                error(f"\nCHAD: execute_tool_calls failed.\n{e}\n\n")
+                logger.error(f"\nExecute tool calls failed.\n{e}\n\n")
                 raise e
             if (tool_responses and len(tool_responses) > 0):
                 # add the AI message with tool_calls to the chat history before adding the response tool messages
@@ -125,17 +168,13 @@ class ChatModelService:
         self.chat_history.add_ai_message(response_ai_msg)
 
         try:
-            dbg_important(f"CHAD: generate_response_langchain {len(self.chat_history.messages)} chat_history.messages: ")
+            logger.debug(f"Chat LLM {len(self.chat_history.messages)} chat_history.messages: ")
             pprint.pp(self.chat_history.messages)
             print("\n", flush=True)
-        except:
-            dbg_important("CHAD: generate_response_langchain() printing chat_history.messages failed")
+        except Exception:
+            logger.debug("Chat LLM printing chat_history.messages failed")
 
         return response_ai_msg
-
-
-    
-
 
 # available callback functions listed here:
 # https://python.langchain.com/api_reference/core/callbacks/langchain_core.callbacks.base.BaseCallbackHandler.html
@@ -143,20 +182,20 @@ class ChatModelService:
 class MyCustomHandler(BaseCallbackHandler):
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
-        print(f"My custom handler, token: {token}")
+        logger.debug(f"MyCustomHandler: on_llm_new_token({token})")
 
     def on_llm_start(self, serialized: dict[str, Any], prompts: list[str], *, run_id: UUID, 
                      parent_run_id: UUID | None = None, tags: list[str] | None = None, 
                      metadata: dict[str, Any] | None = None, **kwargs: Any) -> None:
         # ATTENTION: This method is called for non-chat models (regular LLMs). 
         # If you're implementing a handler for a chat model, you should use on_chat_model_start instead.
-        dbg_important(f"CHAD: on_llm_start")
+        logger.debug("MyCustomHandler: on_llm_start")
 
     def on_chat_model_start(self, serialized: dict[str, Any], messages: list[list[BaseMessage]], *, run_id: UUID, 
                            parent_run_id: UUID | None = None, tags: list[str] | None = None, 
                            metadata: dict[str, Any] | None = None, **kwargs: Any) -> None:
         # ATTENTION: This method is called for chat models. 
         # If you're implementing a handler for a non-chat model, you should use on_llm_start instead.
-        dbg_important(f"CHAD: on_chat_model_start {len(messages)}.{len(messages[0])} messages: {messages}")
+        logger.debug(f"MyCustomHandler: on_chat_model_start {len(messages)}.{len(messages[0])} messages: {messages}")
 
 

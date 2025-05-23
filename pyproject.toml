@@ -1,6 +1,6 @@
 [project]
 name = "ai-chatbot-meetings"
-version = "0.1.0"
+version = "0.2.0"
 description = "Streamlit chatbot with tool calling against cal.com API to schedule and update meetings."
 keywords = ["chatbot", "streamlit", "open-ai", "langchain", "tool-calling"]
 readme = "README.md"
@@ -14,6 +14,9 @@ dependencies = [
     "langgraph>=0.0.27",
     "python-dotenv>=1.0.0",
     "streamlit",
+    "requests>=2.31.0",
+    "streamlit-js-eval",
+    "pytz",
 ]
 authors = [
   {name = "Chad Norwood", email = "chad@chadnorwood.com"},
@@ -42,6 +45,12 @@ lint = [
     "black",
 ]
 
+test = [
+    # pytest for running tests
+    "pytest",
+    "pytest-asyncio",
+]
+
 dev = [
     # Can use https://github.com/cle-b/httpdbg to run streamlit python app
     "httpdbg",
@@ -50,3 +59,8 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = 'py312'
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (may require real API keys)"
+]
