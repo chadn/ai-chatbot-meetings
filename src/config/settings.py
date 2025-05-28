@@ -41,9 +41,7 @@ class OpenAIConfig:
     @classmethod
     def from_env(cls) -> "OpenAIConfig":
         """Create OpenAI config from environment variables."""
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
+        api_key = os.getenv("OPENAI_API_KEY", "")
         
         model_name = os.getenv("OPENAI_MODEL_NAME", DEFAULT_OPENAI_MODEL)
         if model_name not in OPENAI_MODELS_AVAILABLE:
@@ -71,9 +69,7 @@ class CalComConfig:
     @classmethod
     def from_env(cls) -> "CalComConfig":
         """Create Cal.com config from environment variables."""
-        api_key = os.getenv("CALCOM_API_KEY")
-        if not api_key:
-            raise ValueError("CALCOM_API_KEY environment variable is required")
+        api_key = os.getenv("CALCOM_API_KEY", "")
         
         # Details in https://github.com/calcom/cal.com/blob/main/packages/lib/slugify.ts
         username = os.getenv("CALCOM_USERNAME", DEFAULT_CALCOM_USERNAME)

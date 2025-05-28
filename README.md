@@ -3,12 +3,13 @@
 A Streamlit-based chatbot application to book meetings on your cal.com calendar.
 Uses the Langchain Framework to interact with OpenAI's language models, using tool calling to interact with cal.com's API.
 
-Demo the code in this repo here: https://ai-chatbot-meetings.streamlit.app/
+Demo the code in this repo (requires openai key and cal.com key): https://ai-chatbot-meetings.streamlit.app/
 
 ## Features
 
 -   Chat interface with OpenAI models (e.g. GPT-4.1)
--   [Cal.com](https://cal.com) integration for booking meetings and viewing scheduled events. Formerly Calendso, [Cal.com is the open-source](https://github.com/calcom/cal.com) Calendly successor.
+-   [Cal.com](https://cal.com) integration for booking meetings and viewing scheduled events.
+    Formerly Calendso, [Cal.com is the open-source](https://github.com/calcom/cal.com) Calendly successor.
 -   Uses Langchain Framework which enables easy support for Tool Calling and OpenAI API.
 -   Tool calling support for custom functions
 -   Chat history management with JSON export/import
@@ -16,6 +17,10 @@ Demo the code in this repo here: https://ai-chatbot-meetings.streamlit.app/
 -   Streamlit-based web interface
 
 Also see [Architecture.md](docs/Architecture.md) and [TODO.md](docs/TODO.md) for more detailed documentation.
+
+## Streamlit Screenshot
+
+![Streamlit Screenshot 2025-05-28](docs/ai-chatbot-meetings-2025-05-28.png)
 
 ## Cal.com Integration
 
