@@ -20,8 +20,6 @@ def calcom_config():
     return CalComConfig(
         api_key="test_api_key",
         base_url="https://api.cal.com/v2",
-        username="test-user",
-        event_type_id=123,
         timezone="UTC",
         cal_api_version_slots="2024-09-04",
         cal_api_version_bookings="2024-08-13",

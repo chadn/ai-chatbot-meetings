@@ -18,8 +18,6 @@ def app_config():
     calcom_config = CalComConfig(
         api_key="fake-calcom-key",
         base_url="https://api.cal.com/v2",
-        username="test-user",
-        event_type_id=123,
         timezone="UTC",
         cal_api_version_slots="2024-09-04",
         cal_api_version_bookings="2024-08-13",

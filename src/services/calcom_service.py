@@ -242,7 +242,7 @@ curl -v 'https://api.cal.com/v2/event-types?username=chadn' \
 class CalComService:
     """Service for interacting with Cal.com API for calendar management."""
     
-    def __init__(self, config: CalComConfig) -> None:
+    def __init__(self, config: CalComConfig, fetch_user_info: bool = False) -> None:
         """
         Initialize CalCom service with configuration.
         
@@ -252,17 +252,14 @@ class CalComService:
         self.config = config
         self.api_key = config.api_key
         self.base_url = config.base_url
-        self.event_type_id = config.event_type_id
-        self.timezone = config.timezone
-        
-        logger.info(f"CalComService initialized with timezone: {self.timezone}")
-        
-        # Set up headers for API requests
+        self.timezone = config.timezone        
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-    
+        self.event_types = []
+        userinfo = " for " + self.fetch_target_calendar_info() if fetch_user_info else ""
+        logger.info(f"CalComService initialized{userinfo} with timezone: {self.timezone}")
     
     def _validate_api_response(self, data: dict, operation: str) -> dict:
         """Validate Cal.com API response format and extract data."""
@@ -280,7 +277,59 @@ class CalComService:
         """Format timezone information for display."""
         return f" (in {self.timezone})" if self.timezone else ""
     
-    def check_availability(self, start_date: str, end_date: str, event_type_id: int = None) -> Dict[str, List[Dict[str, Any]]]:
+    def fetch_target_calendar_info(self) -> str:
+        """Return username after getting all user info including user's event types."""
+        if not hasattr(self, 'target_calendar_user') or 'username' not in self.target_calendar_user:
+            self.target_calendar_user = self.get_target_calendar_user()
+            self.username = self.target_calendar_user["username"]
+            self.event_types = self.get_target_calendar_user_event_types(self.target_calendar_user["username"])
+        return self.target_calendar_user["username"]
+
+    def get_target_calendar_user(self) -> Dict[str, Any]:
+        """Get the username of the user.
+        According to: https://cal.com/docs/api-reference/v2/me
+        example response:
+        "data": {
+            "id": 1546495,
+            "email": "chad.norwood@gmail.com",
+            "timeFormat": 12,
+            "defaultScheduleId": 678493,
+            "weekStart": "Sunday",
+            "timeZone": "America/Los_Angeles",
+            "username": "chadn",
+            "organizationId": null
+        }
+
+        """
+        url = f"{self.base_url}/me"
+        response = requests.get(url, headers=self.headers)
+        response.raise_for_status()
+        data = response.json()
+        return data["data"]
+
+    def get_target_calendar_user_event_types(self, username: str) -> List[Dict[str, Any]]:
+        """Get the event types for the target calendar user.
+        According to: https://cal.com/docs/api-reference/v2/event-types
+        Sample fields in response dict:
+            "id": 2520312,  # event_type_id, unique identifier for the event type
+            "lengthInMinutes": 15,  # length of the event in minutes
+            "title": "15 Min Meeting",  # title of the event
+            "slug": "15min",  # slug of the event, used in the URL and unique
+            "description": "",
+            "minimumBookingNotice": 120,
+        """
+        url = f"{self.base_url}/event-types"
+        headers = self.headers.copy()
+        headers["cal-api-version"] = self.config.cal_api_version_event_types
+        params = { "username": username }
+
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return data["data"]
+
+    
+    def check_availability(self, start_date: str, end_date: str, event_type_id: int) -> Dict[str, List[Dict[str, Any]]]:
         """
         Check availability slots for a specific event type and date range.
         According to: https://cal.com/docs/api-reference/v2/slots/find-out-when-is-an-event-type-ready-to-be-booked
@@ -297,7 +346,7 @@ class CalComService:
         headers = self.headers.copy()
         headers["cal-api-version"] = self.config.cal_api_version_slots
         params = {
-            "eventTypeId": event_type_id or self.event_type_id,
+            "eventTypeId": event_type_id,
             "start": start_date,
             "end": end_date,
             "timeZone": self.timezone
@@ -360,8 +409,8 @@ class CalComService:
                      start_time: str,
                      name: str, 
                      email: str, 
-                     reason: str = "",
-                     event_type_id: int = None) -> Dict[str, Any]:
+                     event_type_id: int,
+                     reason: str = "") -> Dict[str, Any]:
         """
         Create a new booking in the calendar.
         According to: https://cal.com/docs/api-reference/v2/bookings/create-a-booking
@@ -370,9 +419,8 @@ class CalComService:
             start_time: Start time in ISO format (must end with Z for UTC)
             name: Name of the attendee
             email: Email of the attendee
-            reason: Reason for the meeting (optional)
             event_type_id: ID of the event type
-            
+            reason: Reason for the meeting (optional)
         Returns:
             Dictionary with booking details
         """
@@ -382,7 +430,7 @@ class CalComService:
 
         payload = {
             "start": start_time,
-            "eventTypeId": event_type_id or self.event_type_id,
+            "eventTypeId": event_type_id,
             "attendee": {
                 "name": name,
                 "email": email,
@@ -391,7 +439,6 @@ class CalComService:
             },
             "metadata": {}
         }
-        
         # Add reason/notes if provided
         if reason:
             payload["bookingFieldsResponses"] = {"notes": reason}
@@ -399,21 +446,26 @@ class CalComService:
             # API seems to require notes field
             payload["bookingFieldsResponses"] = {"notes": "No specific reason provided"}
         response = requests.post(url, headers=headers, json=payload)
-        
         try:
             response.raise_for_status()
             data = response.json()
             return self._validate_api_response(data, "create_booking")
         except requests.HTTPError as e:
-            error_message = f"HTTP error: {e}"
+            # Log payload with attendee email redacted
+            redacted_payload = json.loads(json.dumps(payload))
+            if "attendee" in redacted_payload and "email" in redacted_payload["attendee"]:
+                redacted_payload["attendee"]["email"] = "[redacted]"
+            logger.error(f"HTTP error: {e}. Payload: {json.dumps(redacted_payload)}")
             try:
                 error_json = response.json()
                 if "message" in error_json:
-                    error_message = f"{error_message}, API error: {error_json['message']}"
+                    error_message = f"HTTP error: {e}, API error: {error_json['message']}"
                 elif "error" in error_json and "message" in error_json["error"]:
-                    error_message = f"{error_message}, API error: {error_json['error']['message']}"
+                    error_message = f"HTTP error: {e}, API error: {error_json['error']['message']}"
+                else:
+                    error_message = f"HTTP error: {e}"
             except Exception:
-                pass
+                error_message = f"HTTP error: {e}"
             raise requests.HTTPError(error_message, response=response)
         except Exception as e:
             logger.error(f"Unexpected error in create_booking: {e}")
@@ -422,40 +474,41 @@ class CalComService:
     # Formatting methods for user-friendly responses
     def get_formatted_availability(self, start_date: str, end_date: str = None) -> str:
         """
-        Get formatted availability with timezone conversion for user display.
+        Get formatted availability for all event types with timezone conversion for user display.
+        Groups slots by event type and date.
         
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format (optional, defaults to start_date)
-            
         Returns:
-            Formatted string describing available time slots
+            Formatted string describing available time slots for all event types
         """
-        # If end_date is not provided, use start_date
         if not end_date:
             end_date = start_date
-            
-        availability = self.check_availability(start_date, end_date)
-        if not availability:
-            return f"No availability found for {start_date} to {end_date}"
-        
-        result = f"Available time slots for {start_date}"
-        if start_date != end_date:
-            result += f" to {end_date}"
-        result += f" (timezone: {self.timezone}):\n"
-        
-        # availability is a dict mapping dates to lists of slots
-        for date_str in sorted(availability.keys()):
-            date_obj = datetime.fromisoformat(date_str)
-            day_name = date_obj.strftime('%A')
-            result += f"\n{date_str} ({day_name}):\n"
-            
-            slots = availability[date_str]
-            for slot in slots:
-                start_time = convert_to_timezone(slot['start'], self.timezone)
-                result += f"- {start_time.strftime('%H:%M')}\n"
-        
-        return result
+        result_lines = [
+            f"Available time slots for {start_date}" + (f" to {end_date}" if start_date != end_date else "") + f" (timezone: {self.timezone}):"
+        ]
+        if not self.event_types or len(self.event_types) == 0:
+            self.fetch_target_calendar_info()
+        any_slots = False
+        for event_type in self.event_types:
+            header = f"\n[{event_type['title']}] (Event Type ID: {event_type['id']}, {event_type['lengthInMinutes']} minutes)"
+            slots_by_date = self.check_availability(start_date, end_date, event_type["id"])
+            if not slots_by_date or all(not slots for slots in slots_by_date.values()):
+                result_lines.append(header + "\nNo availability found.")
+                continue
+            result_lines.append(header)
+            for date_str in sorted(slots_by_date.keys()):
+                date_obj = datetime.fromisoformat(date_str)
+                day_name = date_obj.strftime('%A')
+                result_lines.append(f"{date_str} ({day_name}):")
+                for slot in slots_by_date[date_str]:
+                    start_time = convert_to_timezone(slot['start'], self.timezone)
+                    result_lines.append(f"- {start_time.strftime('%H:%M')}")
+                any_slots = True
+        if not any_slots:
+            return f"No availability found for {start_date} to {end_date} for any event type."
+        return "\n".join(result_lines)
 
     def _format_booking(self, booking: dict, show_header: bool = False) -> str:
         """Format a single booking object for display."""
@@ -470,7 +523,6 @@ class CalComService:
             end_time_display = f" to {end.strftime('%H:%M')}"
         title = booking.get('title', 'Meeting')
         description = booking.get('description', booking.get('notes', 'No description provided'))
-        # Attendee extraction: prefer first attendee if present
         attendee_name = attendee_email = "Unknown"
         attendees = booking.get('attendees')
         if attendees and isinstance(attendees, list) and len(attendees) > 0:
@@ -513,32 +565,27 @@ class CalComService:
                                        start_time: str,
                                        name: str, 
                                        email: str, 
-                                       reason: str = "",
-                                       event_type_id: int = None) -> str:
+                                       event_type_id: int,
+                                       reason: str = "") -> str:
         """
-        Create a booking and return a formatted confirmation message.
+        Create a booking for a specific event type and return a formatted confirmation message.
         
         Args:
-            start_time: Start time in ISO format 
+            start_time: Start time in ISO format
             name: Name of the attendee
             email: Email of the attendee
+            event_type_id: ID of the event type (required)
             reason: Reason for the meeting (optional)
-            event_type_id: ID of the event type (optional)
-            
         Returns:
             Formatted confirmation message
         """
         # Convert to UTC for booking
         start_utc_str = convert_local_to_utc(start_time, self.timezone)
-        
-        # Book the meeting
         booking = self.create_booking(
             start_time=start_utc_str,
             name=name,
             email=email,
-            reason=reason,
-            event_type_id=event_type_id
+            event_type_id=event_type_id,
+            reason=reason
         )
-        
-        # Return formatted confirmation
         return self.get_formatted_booking_confirmation(booking)

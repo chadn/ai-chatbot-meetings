@@ -41,7 +41,7 @@ class ToolManager:
                 end_date: End date in YYYY-MM-DD format (optional, defaults to start_date if not provided)
                 
             Returns:
-                String describing available time slots
+                String describing available time slots with event type IDs
             """
             try:
                 return calcom_service.get_formatted_availability(start_date, end_date)
@@ -56,7 +56,7 @@ class ToolManager:
         calcom_service = self.calcom_service
         
         @tool
-        def book_meeting(start_time: str, name: str, email: str, reason: str = "") -> str:
+        def book_meeting(start_time: str, name: str, email: str, event_type_id: int, reason: str = "") -> str:
             """
             Book a meeting at the specified time.
             
@@ -64,7 +64,8 @@ class ToolManager:
                 start_time: Meeting start time in ISO format (YYYY-MM-DDTHH:MM:SS)
                 name: Attendee's full name
                 email: Attendee's email address
-                reason: Optional reason for meeting, notes
+                event_type_id: ID from check_meeting_availability tool
+                reason: Optional reason for meeting, notes field in cal.com
                 
             Returns:
                 Confirmation message with meeting details
@@ -74,6 +75,7 @@ class ToolManager:
                     start_time=start_time,
                     name=name,
                     email=email,
+                    event_type_id=event_type_id,
                     reason=reason
                 )
             except Exception as e:

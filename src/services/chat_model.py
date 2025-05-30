@@ -31,7 +31,8 @@ class ChatModelService:
         
         try:
             # Initialize CalCom service
-            calcom_service = CalComService(config.calcom)
+            calcom_service = CalComService(config.calcom, fetch_user_info=True)
+            self.calcom_service = calcom_service
             
             # Initialize tool manager with CalCom service
             self.tool_manager = ToolManager(calcom_service)
@@ -109,7 +110,7 @@ class ChatModelService:
         If the user asks for availability on a specific date:
         
         - Use the check_availability tool with the provided date.
-        - Present available time slots for that day.
+        - Present available time slots for that day (Do not include event type IDs)
         
         Conversational Guidelines:
         

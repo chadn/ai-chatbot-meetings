@@ -15,7 +15,7 @@ from streamlit_js_eval import streamlit_js_eval
 from utils.logger import setup_logger
 from utils.utils import dbg_important
 from config import get_config
-from config.settings import OpenAIConfig, CalComConfig, AppConfig, OPENAI_MODELS_AVAILABLE
+from config.settings import OpenAIConfig, CalComConfig, AppConfig, get_openai_models_available
 
 # Set up logger for this module
 logger = setup_logger(__name__)
@@ -51,7 +51,7 @@ def init_session_state() -> None:
 def setup_page() -> None:
     """Set up the Streamlit page layout and sidebar."""
     st.title("🤖 AI Chatbot for Meetings")
-    userlink = f"cal.com/{get_config().calcom.username}"
+    userlink = st.session_state.get("userlink", "cal.com/")
     st.markdown(f"I can help you schedule meetings based on [{userlink}](https://{userlink}) calendar availability!")
     col1, col2 = st.columns(2)
     with col1:
@@ -84,7 +84,7 @@ def get_api_keys() -> Tuple[str, str]:
         calcom_api_key = st.text_input("Cal.com API Key", type="password", 
                             help="Enter your Cal.com API key")
         if not calcom_api_key:
-            st.info("Please add your Cal.com API key to continue.", icon="🗝️")
+            st.info("Please add your Cal.com API key to continue. Will book on this user's calendar.", icon="🗝️")
             st.stop()
 
     if from_env:
@@ -170,7 +170,7 @@ def setup_sidebar() -> None:
         st.header("Settings")
         
         # Model selection
-        model_options = OPENAI_MODELS_AVAILABLE
+        model_options = get_openai_models_available()
         st.session_state.selected_model = st.selectbox(
             "Select [OpenAI Model](https://platform.openai.com/docs/models)",
             model_options,
@@ -265,7 +265,6 @@ def main() -> None:
     
     if st.session_state.openai_api_key:
         try:
-            # Check if we need to recreate the chat model due to model change
             if ("chat_model" not in st.session_state or 
                 getattr(st.session_state.chat_model.config.openai, 'model_name', None) != st.session_state.selected_model):
                 st.session_state.chat_model = get_chat_model(
@@ -275,6 +274,10 @@ def main() -> None:
                     st.session_state.selected_model
                 )
                 st.session_state.chat_model.set_chat_history(st.session_state.chat_history)
+
+                username = getattr(st.session_state.chat_model.calcom_service, "username", None)
+                if username and username != "unknown":
+                    st.session_state.userlink = f"cal.com/{username}"
             
             display_chat_history()
             handle_user_input(st.session_state.chat_model)

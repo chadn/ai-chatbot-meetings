@@ -6,24 +6,24 @@ import pytz
 from typing import Optional
 from dataclasses import dataclass
 from dotenv import load_dotenv
-import re
+import ast
+import logging
+
 # Load environment variables
 load_dotenv()
 
-
 # must be ones from https://platform.openai.com/docs/models that support "Function calling"
 # for example, chatgpt-4o-latest does not support function calling
-OPENAI_MODELS_AVAILABLE = ["gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.1", "o4-mini", "o3"]
+DEFAULT_OPENAI_MODELS_AVAILABLE = ["gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.1", "o4-mini", "o3"]
 # BEST VALUE: https://platform.openai.com/docs/models/gpt-4.1-mini
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_OPENAI_MAX_TOKENS = 1024
 DEFAULT_OPENAI_TEMPERATURE = 0.0
 
 DEFAULT_CALCOM_BASE_URL = "https://api.cal.com/v2"
-DEFAULT_CALCOM_USERNAME = "chadn"
-DEFAULT_CALCOM_EVENT_TYPE_ID = 2520314
 DEFAULT_CALCOM_API_VERSION_SLOTS = "2024-09-04"
 DEFAULT_CALCOM_API_VERSION_BOOKINGS = "2024-08-13"
+DEFAULT_CALCOM_API_VERSION_EVENT_TYPES = "2024-06-14"
 DEFAULT_CALCOM_LANGUAGE = "en"
 DEFAULT_TIMEZONE = "America/Los_Angeles"
 
@@ -43,9 +43,22 @@ class OpenAIConfig:
         """Create OpenAI config from environment variables."""
         api_key = os.getenv("OPENAI_API_KEY", "")
         
+        models_available = get_openai_models_available()
         model_name = os.getenv("OPENAI_MODEL_NAME", DEFAULT_OPENAI_MODEL)
-        if model_name not in OPENAI_MODELS_AVAILABLE:
-            raise ValueError(f"OPENAI_MODEL_NAME must be one of {OPENAI_MODELS_AVAILABLE}, got: {model_name}")
+        if model_name not in models_available:
+            if model_name != DEFAULT_OPENAI_MODEL:
+                logging.warning(
+                    f"OPENAI_MODEL_NAME={model_name} must be one of {models_available}. "
+                    f"Falling back to DEFAULT_OPENAI_MODEL={DEFAULT_OPENAI_MODEL}."
+                )
+                model_name = DEFAULT_OPENAI_MODEL
+            else:
+                logging.warning(
+                    f"OPENAI_MODEL_NAME={model_name} must be one of {models_available}. "
+                    f"Falling back to first one in available list, {models_available[0]}."
+                )
+                model_name = models_available[0]
+
         
         return cls(
             api_key=api_key,
@@ -59,24 +72,16 @@ class CalComConfig:
     """Cal.com API configuration."""
     api_key: str
     base_url: str = DEFAULT_CALCOM_BASE_URL
-    username: str = DEFAULT_CALCOM_USERNAME
-    event_type_id: int = DEFAULT_CALCOM_EVENT_TYPE_ID
     timezone: str = DEFAULT_TIMEZONE
     cal_api_version_slots: str = DEFAULT_CALCOM_API_VERSION_SLOTS
     cal_api_version_bookings: str = DEFAULT_CALCOM_API_VERSION_BOOKINGS
+    cal_api_version_event_types: str = DEFAULT_CALCOM_API_VERSION_EVENT_TYPES
     default_language: str = DEFAULT_CALCOM_LANGUAGE
     
     @classmethod
     def from_env(cls) -> "CalComConfig":
         """Create Cal.com config from environment variables."""
         api_key = os.getenv("CALCOM_API_KEY", "")
-        
-        # Details in https://github.com/calcom/cal.com/blob/main/packages/lib/slugify.ts
-        username = os.getenv("CALCOM_USERNAME", DEFAULT_CALCOM_USERNAME)
-        # Validate username follows Cal.com requirements
-        if not re.match(r'^[a-zA-Z0-9._-]+$', username):
-            raise ValueError(f"CALCOM_USERNAME must contain only letters, numbers, periods, underscores, and hyphens. Got: {username}")
-        
         timezone = os.getenv("DEFAULT_TIMEZONE", DEFAULT_TIMEZONE)
         # Validate timezone is a valid IANA timezone
         try:
@@ -86,13 +91,13 @@ class CalComConfig:
 
         return cls(
             api_key=api_key,
-            username=username,
             base_url=os.getenv("CALCOM_BASE_URL", DEFAULT_CALCOM_BASE_URL),
-            event_type_id=int(os.getenv("CALCOM_BOOKING_EVENT_TYPE_ID", str(DEFAULT_CALCOM_EVENT_TYPE_ID))),
             timezone=timezone,
             default_language=os.getenv("CALCOM_LANGUAGE", DEFAULT_CALCOM_LANGUAGE),
+            # TODO: is the next few lines needed? seemsredundant?
             cal_api_version_slots=DEFAULT_CALCOM_API_VERSION_SLOTS,
             cal_api_version_bookings=DEFAULT_CALCOM_API_VERSION_BOOKINGS,
+            cal_api_version_event_types=DEFAULT_CALCOM_API_VERSION_EVENT_TYPES
         )
 
 @dataclass
@@ -128,3 +133,18 @@ def reload_config() -> AppConfig:
     global _config
     _config = AppConfig.from_env()
     return _config
+
+def parse_models_env(var: str) -> list:
+    # Accepts comma-separated or Python list string
+    if not var:
+        return []
+    try:
+        # Try to parse as Python list
+        return ast.literal_eval(var)
+    except Exception:
+        # Fallback: split by comma
+        return [m.strip() for m in var.split(",") if m.strip()]
+
+def get_openai_models_available() -> list:
+    """Get the list of models available."""
+    return parse_models_env(os.getenv("OPENAI_MODELS_AVAILABLE")) or DEFAULT_OPENAI_MODELS_AVAILABLE

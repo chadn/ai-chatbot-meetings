@@ -33,7 +33,7 @@ This application integrates with Cal.com's API to provide the following calendar
 To use these features, you'll need to:
 
 1. Have a Cal.com account
-2. Generate an API key from your Cal.com settings
+2. Generate an API key from your Cal.com settings, https://app.cal.com/settings/developer/api-keys
 3. Add the API key to your `.env` file as `CALCOM_API_KEY=your_key_here`
 
 ## Setup
