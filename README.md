@@ -153,11 +153,6 @@ pytest tests/ -m integration
 
 ## Environment Variables
 
--   `OPENAI_API_KEY`: Your OpenAI API key
--   `CALCOM_API_KEY`: Your Cal.com API key
--   `DEBUG_PRINT`: Enable/disable debug printing (True/False)
--   `LANGCHAIN_VERBOSE`: Enable/disable Langchain verbose mode
--   `LANGCHAIN_DEBUG`: Enable/disable Langchain debug mode
--   `LOG_PROMPTS`: Enable/disable prompt logging
+For descriptions, see [.env.template](.env.template)
 
 [Apache License 2.0](LICENSE)

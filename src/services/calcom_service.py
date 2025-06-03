@@ -379,31 +379,54 @@ class CalComService:
         else:
             return {}
 
-    def get_scheduled_bookings(self, email: str) -> List[Dict[str, Any]]:
+    def get_scheduled_bookings(self, email: str, max_results: int = None) -> List[Dict[str, Any]]:
         """
-        Retrieve scheduled events for a user based on email.
+        Retrieve all scheduled events for a user based on email, automatically handling pagination.
         According to: https://cal.com/docs/api-reference/v2/bookings/get-all-bookings
         
         Args:
             email: Email address of the user
-            
+            max_results: Optional maximum number of bookings to fetch (for safety). If None, fetch all.
         Returns:
-            List of scheduled events
+            List of all scheduled events for the user
         """
         url = f"{self.base_url}/bookings"
         headers = self.headers.copy()
         headers["cal-api-version"] = self.config.cal_api_version_bookings
-        params = {
-            "timeZone": self.timezone,
-            "attendeeEmail": email,
-            "sortStart": "asc"
-        }
-        
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        return self._validate_api_response(data, "get_scheduled_bookings")
+        take = 100  # API default and max per docs
+        skip = 0
+        all_bookings = []
+        while True:
+            params = {
+                "timeZone": self.timezone,
+                "attendeeEmail": email,
+                "sortStart": "asc",
+                "take": take,
+                "skip": skip
+            }
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            page_bookings = self._validate_api_response(data, "get_scheduled_bookings")
+            if not isinstance(page_bookings, list):
+                break
+            all_bookings.extend(page_bookings)
+            # Check pagination info if present
+            pagination = data.get("pagination")
+            if max_results is not None and len(all_bookings) >= max_results:
+                all_bookings = all_bookings[:max_results]
+                break
+            if pagination:
+                has_next = pagination.get("hasNextPage", False)
+                if not has_next:
+                    break
+                skip += take
+            else:
+                # Fallback: if less than requested, assume last page
+                if len(page_bookings) < take:
+                    break
+                skip += take
+        return all_bookings
 
     def create_booking(self, 
                      start_time: str,

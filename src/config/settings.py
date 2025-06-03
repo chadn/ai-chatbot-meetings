@@ -4,10 +4,11 @@ Configuration management for the AI Chatbot Meetings application.
 import os
 import pytz
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 import ast
 import logging
+import requests
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +36,7 @@ class OpenAIConfig:
     """OpenAI API configuration."""
     api_key: str
     model_name: str = DEFAULT_OPENAI_MODEL
+    models_available: list[str] = field(default_factory=lambda: DEFAULT_OPENAI_MODELS_AVAILABLE)
     max_tokens: int = DEFAULT_OPENAI_MAX_TOKENS
     temperature: float = DEFAULT_OPENAI_TEMPERATURE
     
@@ -42,27 +44,11 @@ class OpenAIConfig:
     def from_env(cls) -> "OpenAIConfig":
         """Create OpenAI config from environment variables."""
         api_key = os.getenv("OPENAI_API_KEY", "")
-        
-        models_available = get_openai_models_available()
-        model_name = os.getenv("OPENAI_MODEL_NAME", DEFAULT_OPENAI_MODEL)
-        if model_name not in models_available:
-            if model_name != DEFAULT_OPENAI_MODEL:
-                logging.warning(
-                    f"OPENAI_MODEL_NAME={model_name} must be one of {models_available}. "
-                    f"Falling back to DEFAULT_OPENAI_MODEL={DEFAULT_OPENAI_MODEL}."
-                )
-                model_name = DEFAULT_OPENAI_MODEL
-            else:
-                logging.warning(
-                    f"OPENAI_MODEL_NAME={model_name} must be one of {models_available}. "
-                    f"Falling back to first one in available list, {models_available[0]}."
-                )
-                model_name = models_available[0]
-
-        
+        models_available = get_openai_models_available(api_key)
         return cls(
             api_key=api_key,
-            model_name=model_name,
+            models_available=models_available,
+            model_name=validated_model_name(models_available),
             max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", str(DEFAULT_OPENAI_MAX_TOKENS))),
             temperature=float(os.getenv("OPENAI_TEMPERATURE", str(DEFAULT_OPENAI_TEMPERATURE)))
         )
@@ -118,22 +104,6 @@ class AppConfig:
             debug_mode=os.getenv("DEBUG_MODE", str(DEFAULT_DEBUG_MODE)).lower() == "true"
         )
 
-# Global configuration instance
-_config: Optional[AppConfig] = None
-
-def get_config() -> AppConfig:
-    """Get the global configuration instance."""
-    global _config
-    if _config is None:
-        _config = AppConfig.from_env()
-    return _config
-
-def reload_config() -> AppConfig:
-    """Reload configuration from environment variables."""
-    global _config
-    _config = AppConfig.from_env()
-    return _config
-
 def parse_models_env(var: str) -> list:
     # Accepts comma-separated or Python list string
     if not var:
@@ -145,6 +115,46 @@ def parse_models_env(var: str) -> list:
         # Fallback: split by comma
         return [m.strip() for m in var.split(",") if m.strip()]
 
-def get_openai_models_available() -> list:
+def get_openai_models_available(openai_api_key: str) -> list:
     """Get the list of models available."""
-    return parse_models_env(os.getenv("OPENAI_MODELS_AVAILABLE")) or DEFAULT_OPENAI_MODELS_AVAILABLE
+    desired_models_available=parse_models_env(os.getenv("OPENAI_MODELS_AVAILABLE")) or DEFAULT_OPENAI_MODELS_AVAILABLE
+    valid_models = get_all_valid_openai_models(openai_api_key)
+    if len(valid_models) == 0:
+        logging.warn(f"Could not validate OpenAI models, returning: {desired_models_available}")
+        return desired_models_available
+    models_available = []
+    for model in desired_models_available:
+        if model in valid_models:
+            models_available.append(model)
+        else:
+            logging.warn(f"Model {model} is not valid. Skipping.")
+    return models_available
+
+def get_all_valid_openai_models(openai_api_key: str) -> list[str]:
+    url = "https://api.openai.com/v1/models"
+    headers = {
+        "Authorization": f"Bearer {openai_api_key}"
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        valid_models = []
+        for model in data["data"]:
+            if model["owned_by"] == "system" and model["object"] == "model":
+                    valid_models.append(model["id"])
+        return valid_models
+    except Exception as e:
+        logging.warn(f"Error getting all OpenAI models: {e}")
+        return []
+
+def validated_model_name(models_available: list[str]) -> str:
+    model_name = os.getenv("OPENAI_MODEL_NAME", DEFAULT_OPENAI_MODEL)
+    if model_name not in models_available:
+        if model_name != DEFAULT_OPENAI_MODEL:
+            logging.warning(f"OPENAI_MODEL_NAME={model_name} must be one of current list of available models: {models_available}. Falling back to DEFAULT_OPENAI_MODEL={DEFAULT_OPENAI_MODEL}.")
+            model_name = DEFAULT_OPENAI_MODEL
+        else:
+            logging.warning(f"OPENAI_MODEL_NAME={model_name} must be one of current list of available models: {models_available}. Falling back to first one in available list, {models_available[0]}.")
+            model_name = models_available[0]
+    return model_name

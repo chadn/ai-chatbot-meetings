@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import List
 import json
 import logging
@@ -9,24 +10,26 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 logger = logging.getLogger(__name__)
 
 class ChatHistoryManager(StreamlitChatMessageHistory):
-    def __init__(self) -> None:
+    def __init__(self, timezone: str) -> None:
         super().__init__(key="langchain_messages")
-        logger.info("ChatHistoryManager initialization complete.")
+        self.timezone = timezone if timezone else "America/Los_Angeles"
+        logger.info(f"ChatHistoryManager(timezone={self.timezone}) initialization complete.")
+
+    def get_timestamp(self) -> str:
+        return datetime.now(ZoneInfo(self.timezone)).isoformat()
     
     def add_human_message(self, content: str) -> None:
-        timestamp = datetime.now().isoformat()
-        message = HumanMessage(content=content, additional_kwargs={"created_at": timestamp})
+        message = HumanMessage(content=content, additional_kwargs={"created_at": self.get_timestamp()})
         self.add_message(message)
 
     def add_ai_message(self, content: str | AIMessage) -> None:
         if isinstance(content, AIMessage):
             # If it's already an AIMessage, add timestamp if not present
             if not content.additional_kwargs.get("created_at"):
-                content.additional_kwargs["created_at"] = datetime.now().isoformat()
+                content.additional_kwargs["created_at"] = self.get_timestamp()
             self.add_message(content)
         elif isinstance(content, str):
-            timestamp = datetime.now().isoformat()
-            message = AIMessage(content=content, additional_kwargs={"created_at": timestamp})
+            message = AIMessage(content=content, additional_kwargs={"created_at": self.get_timestamp()})
             self.add_message(message)
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
@@ -34,12 +37,11 @@ class ChatHistoryManager(StreamlitChatMessageHistory):
     def add_tool_message(self, toolmsg: ToolMessage) -> None:
         # Add timestamp if not present
         if not toolmsg.additional_kwargs.get("created_at"):
-            toolmsg.additional_kwargs["created_at"] = datetime.now().isoformat()
+            toolmsg.additional_kwargs["created_at"] = self.get_timestamp()
         self.add_message(toolmsg)
 
     def add_system_message(self, content: str) -> None:
-        timestamp = datetime.now().isoformat()
-        message = SystemMessage(content=content, additional_kwargs={"created_at": timestamp})
+        message = SystemMessage(content=content, additional_kwargs={"created_at": self.get_timestamp()})
         self.add_message(message)
 
     def get_just_ai_human_message(self) -> List[BaseMessage]:
@@ -68,7 +70,7 @@ class ChatHistoryManager(StreamlitChatMessageHistory):
                 message_dict = {
                     "type": msg.type,
                     "content": msg.content,
-                    "timestamp": msg.additional_kwargs.get("created_at", datetime.now().isoformat())  # Add timestamp for reference
+                    "timestamp": msg.additional_kwargs.get("created_at", self.get_timestamp())  # Add timestamp for reference
                 }
                 
                 # Add additional fields if they exist

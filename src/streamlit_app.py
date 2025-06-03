@@ -1,7 +1,9 @@
 """
 Main Streamlit application for the chatbot interface.
+
+Config precedence: user input > environment variable > code default.
+All session state keys are defined in SESSION_STATE_KEYS for maintainability.
 """
-import os
 import streamlit as st
 from datetime import datetime
 from io import StringIO
@@ -13,9 +15,7 @@ from services.chat_history import ChatHistoryManager
 from langchain_core.messages import BaseMessage
 from streamlit_js_eval import streamlit_js_eval
 from utils.logger import setup_logger
-from utils.utils import dbg_important
-from config import get_config
-from config.settings import OpenAIConfig, CalComConfig, AppConfig, get_openai_models_available
+from config import AppConfig
 
 # Set up logger for this module
 logger = setup_logger(__name__)
@@ -28,30 +28,49 @@ st.set_page_config(page_title="AI Chatbot Meetings", page_icon="🥾")
 st.session_state.timezone = streamlit_js_eval(
         js_expressions='Intl.DateTimeFormat().resolvedOptions().timeZone', want_output = True, key = 'TZ2')
 
+# Centralized session state keys for maintainability. Order matters.
+SESSION_STATE_KEYS = [
+    'timezone',
+    'chat_history',
+    'app_config',
+    'debug_mode',
+    'userlink',
+    'chat_model',
+    'selected_model',
+]
+
+def init_session_state() -> None:
+    """Initialize Streamlit session state variables. Should be called once at app startup."""
+    for key in SESSION_STATE_KEYS:
+        if key not in st.session_state:
+            # Set defaults for known keys
+            if key == 'chat_history':
+                st.session_state[key] = ChatHistoryManager(timezone=st.session_state.timezone)
+            elif key == 'app_config':
+                st.session_state[key] = AppConfig.from_env()
+                st.session_state[key].calcom.timezone = st.session_state.timezone
+            elif key == 'debug_mode':
+                st.session_state[key] = st.session_state.app_config.debug_mode
+            elif key == 'selected_model':
+                st.session_state[key] = st.session_state.app_config.openai.model_name
+            elif key == 'timezone2':
+                st.session_state[key] = streamlit_js_eval(
+                    js_expressions='Intl.DateTimeFormat().resolvedOptions().timeZone', want_output=True, key='TZ')
+            elif key == 'userlink':
+                st.session_state[key] = "cal.com/"
+            else:
+                st.session_state[key] = None
 
 def dbg(msg: str) -> None:
     """Debug logging function."""
-    if st.session_state.get('dbg_print', False):
+    if st.session_state.get('debug_mode', False):
         logger.info(msg)
-
-def init_session_state() -> None:
-    """Initialize Streamlit session state variables."""
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = ChatHistoryManager()
-    
-    # Debug settings
-    if 'dbg_print' not in st.session_state:
-        st.session_state.dbg_print = os.getenv('DEBUG_PRINT', 'false').lower() == 'true'
-    
-    # Model selection
-    if 'selected_model' not in st.session_state:
-        st.session_state.selected_model = os.getenv('OPENAI_MODEL_NAME')
 
 
 def setup_page() -> None:
     """Set up the Streamlit page layout and sidebar."""
     st.title("🤖 AI Chatbot for Meetings")
-    userlink = st.session_state.get("userlink", "cal.com/")
+    userlink = st.session_state.userlink
     st.markdown(f"I can help you schedule meetings based on [{userlink}](https://{userlink}) calendar availability!")
     col1, col2 = st.columns(2)
     with col1:
@@ -60,66 +79,27 @@ def setup_page() -> None:
         st.info("**Show me the scheduled events**")
 
 
-def get_api_keys() -> Tuple[str, str]:
-    """Get API keys from environment or user input.
-    
+def init_api_keys() -> None:
+    """Get API keys from config or user input. User input takes precedence over config/env/default.
+    Updates st.session_state.app_config if user provides new keys.
     Returns:
         Tuple[str, str]: OpenAI API key and Cal.com API key
     """
-    from_env = []
-    openai_api_key = os.getenv('OPENAI_API_KEY')
-    if openai_api_key:
-        from_env.append("OPENAI_API_KEY")
-    else:        
-        openai_api_key = st.text_input("OpenAI API Key", type="password", 
-                            help="Enter your OpenAI API key")
+    openai_api_key = st.session_state.app_config.openai.api_key
+    calcom_api_key = st.session_state.app_config.calcom.api_key
+    if not openai_api_key:
+        openai_api_key = st.text_input("OpenAI API Key", type="password", help="Enter your OpenAI API key")
         if not openai_api_key:
             st.info("Please add your OpenAI API key to continue.", icon="🗝️")
             st.stop()
-    
-    calcom_api_key = os.getenv('CALCOM_API_KEY')
-    if calcom_api_key:
-        from_env.append("CALCOM_API_KEY")
-    else:        
-        calcom_api_key = st.text_input("Cal.com API Key", type="password", 
-                            help="Enter your Cal.com API key")
+        # User input takes precedence
+        st.session_state.app_config.openai.api_key = openai_api_key
+    if not calcom_api_key:
+        calcom_api_key = st.text_input("Cal.com API Key", type="password", help="Enter your Cal.com API key")
         if not calcom_api_key:
             st.info("Please add your Cal.com API key to continue. Will book on this user's calendar.", icon="🗝️")
             st.stop()
-
-    if from_env:
-        st.write(f"Using {', '.join(from_env)} from env variable")
-    return openai_api_key, calcom_api_key
-
-
-def get_chat_model(openai_api_key: str, calcom_api_key: str, timezone: str, model_name: str) -> ChatModelService:
-    """Initialize the chat model service with dynamic configuration.
-    
-    Args:
-        openai_api_key: OpenAI API key
-        calcom_api_key: Cal.com API key
-        timezone: Timezone
-        model_name: Selected model name
-        
-    Returns:
-        ChatModelService: Initialized chat model service
-    """
-    # Create dynamic configuration
-    openai_config = OpenAIConfig(
-        api_key=openai_api_key,
-        model_name=model_name
-    )
-    calcom_config = CalComConfig(
-        api_key=calcom_api_key,
-        timezone=timezone
-    )
-    app_config = AppConfig(
-        openai=openai_config,
-        calcom=calcom_config
-    )
-    
-    dbg(f"Using model: {model_name}")
-    return ChatModelService(app_config, st.session_state.chat_history)
+        st.session_state.app_config.calcom.api_key = calcom_api_key
 
 
 @st.fragment
@@ -167,31 +147,25 @@ def upload_messages() -> None:
 def setup_sidebar() -> None:
     """Configure and display sidebar elements."""
     with st.sidebar:
-        st.header("Settings")
-        
-        # Model selection
-        model_options = get_openai_models_available()
+        st.header("Settings")        
+        model_options = st.session_state.app_config.openai.models_available
         st.session_state.selected_model = st.selectbox(
             "Select [OpenAI Model](https://platform.openai.com/docs/models)",
             model_options,
             index=model_options.index(st.session_state.selected_model) if st.session_state.selected_model in model_options else 0,
             help="Choose which OpenAI model to use for responses"
         )
-        
-        # Debug toggle
-        st.session_state.dbg_print = st.checkbox(
+        st.session_state.app_config.openai.model_name = st.session_state.selected_model
+        st.session_state.debug_mode = st.checkbox(
             "Enable Debug Logging", 
-            value=st.session_state.dbg_print,
+            value=st.session_state.debug_mode,
             help="Show detailed logging information"
-        )
-        
-        # Configuration info
+        )        
         try:
-            config = get_config()
             st.subheader("Configuration")
             st.text(f"Current Model: {st.session_state.selected_model}")
             st.text(f"Timezone: {st.session_state.timezone}")
-            st.text(f"Log Level: {config.log_level}")
+            st.text(f"Log Level: {st.session_state.app_config.log_level}")
         except Exception as e:
             st.error(f"Configuration error: {e}")
         
@@ -235,8 +209,6 @@ def display_chat_history() -> None:
 
 def handle_user_input(chat_model: ChatModelService) -> None:
     """Handle user input and generate AI responses."""
-    # Chat input
-    dbg_important("handle_user_input starting")
     if prompt := st.chat_input("What can I answer for you today?"):
         # Add user message to history and display it
         st.session_state.chat_history.add_human_message(prompt)
@@ -259,37 +231,26 @@ def main() -> None:
     init_session_state()
     setup_page()
     setup_sidebar()
+    init_api_keys()
 
-    if "openai_api_key" not in st.session_state:
-        (st.session_state.openai_api_key, st.session_state.calcom_api_key) = get_api_keys()
-    
-    if st.session_state.openai_api_key:
-        try:
-            if ("chat_model" not in st.session_state or 
-                getattr(st.session_state.chat_model.config.openai, 'model_name', None) != st.session_state.selected_model):
-                st.session_state.chat_model = get_chat_model(
-                    st.session_state.openai_api_key, 
-                    st.session_state.calcom_api_key, 
-                    st.session_state.timezone,
-                    st.session_state.selected_model
-                )
-                st.session_state.chat_model.set_chat_history(st.session_state.chat_history)
-
-                username = getattr(st.session_state.chat_model.calcom_service, "username", None)
-                if username and username != "unknown":
-                    st.session_state.userlink = f"cal.com/{username}"
-            
-            display_chat_history()
-            handle_user_input(st.session_state.chat_model)
-        except Exception as e:
-            logger.error(f"main() {type(e).__name__} Exception: {e}")
-            logger.error("main() traceback:")
-            logger.error(traceback.format_exc())
-            st.error(f"Application error: {str(e)}", icon="🚨")
+    try:
+        if st.session_state.chat_model and st.session_state.selected_model != st.session_state.chat_model.config.openai.model_name:
+            st.session_state.chat_model = None
+        if "chat_model" not in st.session_state or st.session_state.chat_model is None:
+            dbg(f"Creating new chat_model with model_name={st.session_state.selected_model}")
+            st.session_state.chat_model = ChatModelService(st.session_state.app_config, st.session_state.chat_history)
+            st.session_state.chat_model.set_chat_history(st.session_state.chat_history)
+            username = getattr(st.session_state.chat_model.calcom_service, "username", None)
+            if username and username != "unknown":
+                st.session_state.userlink = f"cal.com/{username}"
+        
+        display_chat_history()
+        handle_user_input(st.session_state.chat_model)
+    except Exception as e:
+        logger.error(f"main() {type(e).__name__} Exception: {e}")
+        logger.error("main() traceback:")
+        logger.error(traceback.format_exc())
+        st.error(f"Application error: {str(e)}", icon="🚨")
 
 if __name__ == "__main__":
     main()
-
-
-
-

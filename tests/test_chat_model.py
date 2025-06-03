@@ -39,7 +39,7 @@ def create_mock_chat_history():
         mock_instance.add_message = Mock(side_effect=lambda msg: mock_instance.messages.append(msg))
         mock_instance.clear = Mock(side_effect=lambda: mock_instance.messages.clear())
         mock_parent.return_value = mock_instance
-        return ChatHistoryManager()
+        return ChatHistoryManager(timezone="UTC")
 
 
 def test_chat_model_initialization(app_config):
